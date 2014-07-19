@@ -2093,8 +2093,15 @@ redo:
         return AVERROR_INVALIDDATA;
     }
 end:
-    if (ret < 0)
+    if (ret < 0) {
+        if (ret == AVERROR_PATCHWELCOME && rt->transport == RTSP_TRANSPORT_RTP) {
+            RTPDynamicProtocolHandler* dynamic = (RTPDynamicProtocolHandler*)((RTPDemuxContext*)rtsp_st->transport_priv)->handler;
+            if (dynamic->codec_id == AV_CODEC_ID_MJPEG) {
+                return ret;
+            }
+        }
         goto redo;
+    }
     if (ret == 1)
         /* more packets may follow, so we save the RTP context */
         rt->cur_transport_priv = rtsp_st->transport_priv;
