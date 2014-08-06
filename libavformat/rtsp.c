@@ -1938,6 +1938,7 @@ int ff_rtsp_fetch_packet(AVFormatContext *s, AVPacket *pkt)
     int ret, len;
     RTSPStream *rtsp_st, *first_queue_st = NULL;
     int64_t wait_end = 0;
+    int redo_errors = 0;
 
     if (rt->nb_byes == rt->nb_rtsp_streams)
         return AVERROR_EOF;
@@ -2097,6 +2098,14 @@ end:
         if (ret == AVERROR_PATCHWELCOME && rt->transport == RTSP_TRANSPORT_RTP) {
             RTPDynamicProtocolHandler* dynamic = (RTPDynamicProtocolHandler*)((RTPDemuxContext*)rtsp_st->transport_priv)->handler;
             if (dynamic->codec_id == AV_CODEC_ID_MJPEG) {
+                return ret;
+            }
+        }
+        
+        if (ret == -1) {
+            ++redo_errors;
+            if (redo_errors > 5) {
+                av_log(s, AV_LOG_ERROR, "Fetch Packet Redo Failed after 5 attempts");
                 return ret;
             }
         }
