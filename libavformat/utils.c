@@ -526,11 +526,8 @@ int avformat_open_input(AVFormatContext **ps, const char *filename,
     if (fmt)
         s->iformat = fmt;
 
-    if (options) {
+    if (options)
         av_dict_copy(&tmp, *options, 0);
-    }
-    av_dict_set(&tmp, "stimeout", "5000000", AV_DICT_DONT_OVERWRITE);
-
 
     if ((ret = av_opt_set_dict(s, &tmp)) < 0)
         goto fail;
