@@ -30,6 +30,7 @@
 
 #include "libavutil/pixdesc.h"
 #include "libavutil/opt.h"
+#include "libavutil/avstring.h"
 #include "libavformat/internal.h"
 #include "libavutil/internal.h"
 #include "libavutil/time.h"
@@ -80,7 +81,6 @@ typedef struct
 {
     AVClass*        class;
 
-    float           frame_rate;
     int             frames_captured;
     int             audio_frames_captured;
     int64_t         first_pts;
@@ -98,6 +98,8 @@ typedef struct
 
     char            *video_filename;
     char            *audio_filename;
+
+    int             num_video_devices;
 
     int             audio_channels;
     int             audio_bits_per_sample;
@@ -251,12 +253,13 @@ static void parse_device_name(AVFormatContext *s)
 {
     AVFContext *ctx = (AVFContext*)s->priv_data;
     char *tmp = av_strdup(s->filename);
+    char *save;
 
     if (tmp[0] != ':') {
-        ctx->video_filename = strtok(tmp,  ":");
-        ctx->audio_filename = strtok(NULL, ":");
+        ctx->video_filename = av_strtok(tmp,  ":", &save);
+        ctx->audio_filename = av_strtok(NULL, ":", &save);
     } else {
-        ctx->audio_filename = strtok(tmp,  ":");
+        ctx->audio_filename = av_strtok(tmp,  ":", &save);
     }
 }
 
@@ -264,16 +267,22 @@ static int add_video_device(AVFormatContext *s, AVCaptureDevice *video_device)
 {
     AVFContext *ctx = (AVFContext*)s->priv_data;
     NSError *error  = nil;
-    AVCaptureDeviceInput* capture_dev_input = [[[AVCaptureDeviceInput alloc] initWithDevice:video_device error:&error] autorelease];
+    AVCaptureInput* capture_input = nil;
 
-    if (!capture_dev_input) {
+    if (ctx->video_device_index < ctx->num_video_devices) {
+        capture_input = (AVCaptureInput*) [[[AVCaptureDeviceInput alloc] initWithDevice:video_device error:&error] autorelease];
+    } else {
+        capture_input = (AVCaptureInput*) video_device;
+    }
+
+    if (!capture_input) {
         av_log(s, AV_LOG_ERROR, "Failed to create AV capture input device: %s\n",
                [[error localizedDescription] UTF8String]);
         return 1;
     }
 
-    if ([ctx->capture_session canAddInput:capture_dev_input]) {
-        [ctx->capture_session addInput:capture_dev_input];
+    if ([ctx->capture_session canAddInput:capture_input]) {
+        [ctx->capture_session addInput:capture_input];
     } else {
         av_log(s, AV_LOG_ERROR, "can't add video input to capture session\n");
         return 1;
@@ -522,19 +531,36 @@ static int avf_read_header(AVFormatContext *s)
     AVFContext *ctx         = (AVFContext*)s->priv_data;
     ctx->first_pts          = av_gettime();
     ctx->first_audio_pts    = av_gettime();
+    uint32_t num_screens    = 0;
 
     pthread_mutex_init(&ctx->frame_lock, NULL);
     pthread_cond_init(&ctx->frame_wait_cond, NULL);
+
+#if __MAC_OS_X_VERSION_MIN_REQUIRED >= 1070
+    CGGetActiveDisplayList(0, NULL, &num_screens);
+#endif
 
     // List devices if requested
     if (ctx->list_devices) {
         av_log(ctx, AV_LOG_INFO, "AVFoundation video devices:\n");
         NSArray *devices = [AVCaptureDevice devicesWithMediaType:AVMediaTypeVideo];
+        int index = 0;
         for (AVCaptureDevice *device in devices) {
             const char *name = [[device localizedName] UTF8String];
-            int index  = [devices indexOfObject:device];
+            index            = [devices indexOfObject:device];
             av_log(ctx, AV_LOG_INFO, "[%d] %s\n", index, name);
+            index++;
         }
+#if __MAC_OS_X_VERSION_MIN_REQUIRED >= 1070
+        if (num_screens > 0) {
+            CGDirectDisplayID screens[num_screens];
+            CGGetActiveDisplayList(num_screens, screens, &num_screens);
+            for (int i = 0; i < num_screens; i++) {
+                av_log(ctx, AV_LOG_INFO, "[%d] Capture screen %d\n", index + i, i);
+            }
+        }
+#endif
+
         av_log(ctx, AV_LOG_INFO, "AVFoundation audio devices:\n");
         devices = [AVCaptureDevice devicesWithMediaType:AVMediaTypeAudio];
         for (AVCaptureDevice *device in devices) {
@@ -549,6 +575,9 @@ static int avf_read_header(AVFormatContext *s)
     AVCaptureDevice *video_device = nil;
     AVCaptureDevice *audio_device = nil;
 
+    NSArray *video_devices = [AVCaptureDevice devicesWithMediaType:AVMediaTypeVideo];
+    ctx->num_video_devices = [video_devices count];
+
     // parse input filename for video and audio device
     parse_device_name(s);
 
@@ -561,31 +590,51 @@ static int avf_read_header(AVFormatContext *s)
     }
 
     if (ctx->video_device_index >= 0) {
-        NSArray *devices = [AVCaptureDevice devicesWithMediaType:AVMediaTypeVideo];
-
-        if (ctx->video_device_index >= [devices count]) {
+        if (ctx->video_device_index < ctx->num_video_devices) {
+            video_device = [video_devices objectAtIndex:ctx->video_device_index];
+        } else if (ctx->video_device_index < ctx->num_video_devices + num_screens) {
+#if __MAC_OS_X_VERSION_MIN_REQUIRED >= 1070
+            CGDirectDisplayID screens[num_screens];
+            CGGetActiveDisplayList(num_screens, screens, &num_screens);
+            AVCaptureScreenInput* capture_screen_input = [[[AVCaptureScreenInput alloc] initWithDisplayID:screens[ctx->video_device_index - ctx->num_video_devices]] autorelease];
+            video_device = (AVCaptureDevice*) capture_screen_input;
+#endif
+         } else {
             av_log(ctx, AV_LOG_ERROR, "Invalid device index\n");
             goto fail;
         }
-
-        video_device = [devices objectAtIndex:ctx->video_device_index];
     } else if (ctx->video_filename &&
-               strncmp(ctx->video_filename, "default", 7)) {
-        NSArray *devices = [AVCaptureDevice devicesWithMediaType:AVMediaTypeVideo];
-
-        for (AVCaptureDevice *device in devices) {
+               strncmp(ctx->video_filename, "none", 4)) {
+        if (!strncmp(ctx->video_filename, "default", 7)) {
+            video_device = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
+        } else {
+        // looking for video inputs
+        for (AVCaptureDevice *device in video_devices) {
             if (!strncmp(ctx->video_filename, [[device localizedName] UTF8String], strlen(ctx->video_filename))) {
                 video_device = device;
                 break;
             }
         }
 
+#if __MAC_OS_X_VERSION_MIN_REQUIRED >= 1070
+        // looking for screen inputs
+        if (!video_device) {
+            int idx;
+            if(sscanf(ctx->video_filename, "Capture screen %d", &idx) && idx < num_screens) {
+                CGDirectDisplayID screens[num_screens];
+                CGGetActiveDisplayList(num_screens, screens, &num_screens);
+                AVCaptureScreenInput* capture_screen_input = [[[AVCaptureScreenInput alloc] initWithDisplayID:screens[idx]] autorelease];
+                video_device = (AVCaptureDevice*) capture_screen_input;
+                ctx->video_device_index = ctx->num_video_devices + idx;
+            }
+        }
+#endif
+        }
+
         if (!video_device) {
             av_log(ctx, AV_LOG_ERROR, "Video device not found\n");
             goto fail;
         }
-    } else {
-        video_device = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
     }
 
     // get audio device
@@ -599,7 +648,10 @@ static int avf_read_header(AVFormatContext *s)
 
         audio_device = [devices objectAtIndex:ctx->audio_device_index];
     } else if (ctx->audio_filename &&
-               strncmp(ctx->audio_filename, "default", 7)) {
+               strncmp(ctx->audio_filename, "none", 4)) {
+        if (!strncmp(ctx->audio_filename, "default", 7)) {
+            audio_device = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeAudio];
+        } else {
         NSArray *devices = [AVCaptureDevice devicesWithMediaType:AVMediaTypeAudio];
 
         for (AVCaptureDevice *device in devices) {
@@ -608,13 +660,12 @@ static int avf_read_header(AVFormatContext *s)
                 break;
             }
         }
+        }
 
         if (!audio_device) {
             av_log(ctx, AV_LOG_ERROR, "Audio device not found\n");
              goto fail;
         }
-    } else {
-        audio_device = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeAudio];
     }
 
     // Video nor Audio capture device not found, looking for AVMediaTypeVideo/Audio
@@ -624,7 +675,11 @@ static int avf_read_header(AVFormatContext *s)
     }
 
     if (video_device) {
-        av_log(s, AV_LOG_DEBUG, "'%s' opened\n", [[video_device localizedName] UTF8String]);
+        if (ctx->video_device_index < ctx->num_video_devices) {
+            av_log(s, AV_LOG_DEBUG, "'%s' opened\n", [[video_device localizedName] UTF8String]);
+        } else {
+            av_log(s, AV_LOG_DEBUG, "'%s' opened\n", [[video_device description] UTF8String]);
+        }
     }
     if (audio_device) {
         av_log(s, AV_LOG_DEBUG, "audio device '%s' opened\n", [[audio_device localizedName] UTF8String]);
@@ -771,7 +826,6 @@ static int avf_close(AVFormatContext *s)
 }
 
 static const AVOption options[] = {
-    { "frame_rate", "set frame rate", offsetof(AVFContext, frame_rate), AV_OPT_TYPE_FLOAT, { .dbl = 30.0 }, 0.1, 30.0, AV_OPT_TYPE_VIDEO_RATE, NULL },
     { "list_devices", "list available devices", offsetof(AVFContext, list_devices), AV_OPT_TYPE_INT, {.i64=0}, 0, 1, AV_OPT_FLAG_DECODING_PARAM, "list_devices" },
     { "true", "", 0, AV_OPT_TYPE_CONST, {.i64=1}, 0, 0, AV_OPT_FLAG_DECODING_PARAM, "list_devices" },
     { "false", "", 0, AV_OPT_TYPE_CONST, {.i64=0}, 0, 0, AV_OPT_FLAG_DECODING_PARAM, "list_devices" },

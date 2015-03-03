@@ -37,6 +37,9 @@
 #include "formats.h"
 #include "internal.h"
 
+#include "libavutil/ffversion.h"
+const char av_filter_ffversion[] = "FFmpeg version " FFMPEG_VERSION;
+
 static int ff_filter_frame_framed(AVFilterLink *link, AVFrame *frame);
 
 void ff_tlog_ref(void *ctx, AVFrame *ref, int end)
@@ -227,6 +230,11 @@ int avfilter_config_links(AVFilterContext *filter)
         AVFilterLink *inlink;
 
         if (!link) continue;
+        if (!link->src || !link->dst) {
+            av_log(filter, AV_LOG_ERROR,
+                   "Not all input and output are properly linked (%d).\n", i);
+            return AVERROR(EINVAL);
+        }
 
         inlink = link->src->nb_inputs ? link->src->inputs[0] : NULL;
         link->current_pts = AV_NOPTS_VALUE;
@@ -957,21 +965,6 @@ int avfilter_init_str(AVFilterContext *filter, const char *args)
                 goto fail;
 #endif
         } else {
-#if CONFIG_MP_FILTER
-            if (!strcmp(filter->filter->name, "mp")) {
-                char *escaped;
-
-                if (!strncmp(args, "filter=", 7))
-                    args += 7;
-                ret = av_escape(&escaped, args, ":=", AV_ESCAPE_MODE_BACKSLASH, 0);
-                if (ret < 0) {
-                    av_log(filter, AV_LOG_ERROR, "Unable to escape MPlayer filters arg '%s'\n", args);
-                    goto fail;
-                }
-                ret = process_options(filter, &options, escaped);
-                av_free(escaped);
-            } else
-#endif
             ret = process_options(filter, &options, args);
             if (ret < 0)
                 goto fail;
@@ -1155,7 +1148,8 @@ int ff_filter_frame(AVFilterLink *link, AVFrame *frame)
 
     /* Consistency checks */
     if (link->type == AVMEDIA_TYPE_VIDEO) {
-        if (strcmp(link->dst->filter->name, "scale")) {
+        if (strcmp(link->dst->filter->name, "scale") &&
+            strcmp(link->dst->filter->name, "idet")) {
             av_assert1(frame->format                 == link->format);
             av_assert1(frame->width               == link->w);
             av_assert1(frame->height               == link->h);

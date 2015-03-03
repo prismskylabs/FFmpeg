@@ -31,6 +31,9 @@ tests/data/vsynth1.yuv: tests/videogen$(HOSTEXESUF) | tests/data
 	$(M)$< $@
 
 tests/data/vsynth2.yuv: tests/rotozoom$(HOSTEXESUF) | tests/data
+	$(M)$< $(SRC_PATH)/tests/reference.pnm $@
+
+tests/data/vsynth_lena.yuv: tests/rotozoom$(HOSTEXESUF) | tests/data
 	$(M)$< $(SAMPLES)/lena.pnm $@
 
 tests/data/vsynth3.yuv: tests/videogen$(HOSTEXESUF) | tests/data
@@ -38,16 +41,16 @@ tests/data/vsynth3.yuv: tests/videogen$(HOSTEXESUF) | tests/data
 
 tests/test_copy.ffmeta: TAG = COPY
 tests/test_copy.ffmeta: tests/data
-	$(M)cp -f $(SRC_PATH)/tests/test.ffmeta $(TARGET_PATH)/tests/test_copy.ffmeta
+	$(M)cp -f $(SRC_PATH)/tests/test.ffmeta tests/test_copy.ffmeta
 
 tests/data/ffprobe-test.nut: ffmpeg$(EXESUF) tests/test_copy.ffmeta
-	$(M)$(TARGET_EXEC) ./$< \
+	$(M)$(TARGET_EXEC) $(TARGET_PATH)/$< \
         -f lavfi -i "aevalsrc=sin(400*PI*2*t):d=0.125[out0]; testsrc=d=0.125[out1]; testsrc=s=100x100:d=0.125[out2]" \
         -f ffmetadata -i $(TARGET_PATH)/tests/test_copy.ffmeta \
         -flags +bitexact -map 0:0 -map 0:1 -map 0:2 -map_metadata 1 \
         -map_metadata:s:0 1:s:0 -map_metadata:s:1 1:s:1 \
         -vcodec rawvideo -acodec pcm_s16le \
-        -y $@ 2>/dev/null
+        -y $(TARGET_PATH)/$@ 2>/dev/null
 
 tests/data/%.sw tests/data/asynth% tests/data/vsynth%.yuv tests/vsynth%/00.pgm tests/data/%.nut: TAG = GEN
 
@@ -132,6 +135,7 @@ include $(SRC_PATH)/tests/fate/monkeysaudio.mak
 include $(SRC_PATH)/tests/fate/mp3.mak
 include $(SRC_PATH)/tests/fate/mpc.mak
 include $(SRC_PATH)/tests/fate/mpeg4.mak
+include $(SRC_PATH)/tests/fate/mxf.mak
 include $(SRC_PATH)/tests/fate/opus.mak
 include $(SRC_PATH)/tests/fate/pcm.mak
 include $(SRC_PATH)/tests/fate/probe.mak

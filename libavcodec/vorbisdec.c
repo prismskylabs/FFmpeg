@@ -35,7 +35,6 @@
 #include "avcodec.h"
 #include "get_bits.h"
 #include "fft.h"
-#include "fmtconvert.h"
 #include "internal.h"
 
 #include "vorbis.h"
@@ -47,7 +46,7 @@
 #define V_MAX_VLCS (1 << 16)
 #define V_MAX_PARTITIONS (1 << 20)
 
-typedef struct {
+typedef struct vorbis_codebook {
     uint8_t      dimensions;
     uint8_t      lookup_type;
     uint8_t      maxdepth;
@@ -63,7 +62,7 @@ struct vorbis_context_s;
 typedef
 int (* vorbis_floor_decode_func)
     (struct vorbis_context_s *, vorbis_floor_data *, float *);
-typedef struct {
+typedef struct vorbis_floor {
     uint8_t floor_type;
     vorbis_floor_decode_func decode;
     union vorbis_floor_u {
@@ -93,7 +92,7 @@ typedef struct {
     } data;
 } vorbis_floor;
 
-typedef struct {
+typedef struct vorbis_residue {
     uint16_t      type;
     uint32_t      begin;
     uint32_t      end;
@@ -106,7 +105,7 @@ typedef struct {
     uint8_t      *classifs;
 } vorbis_residue;
 
-typedef struct {
+typedef struct vorbis_mapping {
     uint8_t       submaps;
     uint16_t      coupling_steps;
     uint8_t      *magnitude;
@@ -116,7 +115,7 @@ typedef struct {
     uint8_t       submap_residue[16];
 } vorbis_mapping;
 
-typedef struct {
+typedef struct vorbis_mode {
     uint8_t       blockflag;
     uint16_t      windowtype;
     uint16_t      transformtype;
@@ -127,8 +126,7 @@ typedef struct vorbis_context_s {
     AVCodecContext *avctx;
     GetBitContext gb;
     VorbisDSPContext dsp;
-    AVFloatDSPContext fdsp;
-    FmtConvertContext fmt_conv;
+    AVFloatDSPContext *fdsp;
 
     FFTContext mdct[2];
     uint8_t       first_frame;
@@ -193,6 +191,7 @@ static void vorbis_free(vorbis_context *vc)
 
     av_freep(&vc->channel_residues);
     av_freep(&vc->saved);
+    av_freep(&vc->fdsp);
 
     if (vc->residues)
         for (i = 0; i < vc->residue_count; i++)
@@ -378,10 +377,17 @@ static int vorbis_parse_setup_hdr_codebooks(vorbis_context *vc)
             }
 
 // Weed out unused vlcs and build codevector vector
-            codebook_setup->codevectors = used_entries ? av_mallocz_array(used_entries,
-                                                                    codebook_setup->dimensions *
-                                                                    sizeof(*codebook_setup->codevectors))
-                                                       : NULL;
+            if (used_entries) {
+                codebook_setup->codevectors =
+                    av_mallocz_array(used_entries, codebook_setup->dimensions *
+                               sizeof(*codebook_setup->codevectors));
+                if (!codebook_setup->codevectors) {
+                    ret = AVERROR(ENOMEM);
+                    goto error;
+                }
+            } else
+                codebook_setup->codevectors = NULL;
+
             for (j = 0, i = 0; i < entries; ++i) {
                 unsigned dim = codebook_setup->dimensions;
 
@@ -992,6 +998,9 @@ static int vorbis_parse_id_hdr(vorbis_context *vc)
 
     ff_mdct_init(&vc->mdct[0], bl0, 1, -1.0);
     ff_mdct_init(&vc->mdct[1], bl1, 1, -1.0);
+    vc->fdsp = avpriv_float_dsp_alloc(vc->avctx->flags & CODEC_FLAG_BITEXACT);
+    if (!vc->fdsp)
+        return AVERROR(ENOMEM);
 
     av_dlog(NULL, " vorbis version %d \n audio_channels %d \n audio_samplerate %d \n bitrate_max %d \n bitrate_nom %d \n bitrate_min %d \n blk_0 %d blk_1 %d \n ",
             vc->version, vc->audio_channels, vc->audio_samplerate, vc->bitrate_maximum, vc->bitrate_nominal, vc->bitrate_minimum, vc->blocksize[0], vc->blocksize[1]);
@@ -1013,15 +1022,13 @@ static av_cold int vorbis_decode_init(AVCodecContext *avctx)
     vorbis_context *vc = avctx->priv_data;
     uint8_t *headers   = avctx->extradata;
     int headers_len    = avctx->extradata_size;
-    uint8_t *header_start[3];
+    const uint8_t *header_start[3];
     int header_len[3];
     GetBitContext *gb = &vc->gb;
     int hdr_type, ret;
 
     vc->avctx = avctx;
     ff_vorbisdsp_init(&vc->dsp);
-    avpriv_float_dsp_init(&vc->fdsp, avctx->flags & CODEC_FLAG_BITEXACT);
-    ff_fmt_convert_init(&vc->fmt_conv, avctx);
 
     avctx->sample_fmt = AV_SAMPLE_FMT_FLTP;
 
@@ -1688,7 +1695,7 @@ static int vorbis_parse_audio_packet(vorbis_context *vc, float **floor_ptr)
 
     for (j = vc->audio_channels-1;j >= 0; j--) {
         ch_res_ptr   = vc->channel_residues + res_chan[j] * blocksize / 2;
-        vc->fdsp.vector_fmul(floor_ptr[j], floor_ptr[j], ch_res_ptr, blocksize / 2);
+        vc->fdsp->vector_fmul(floor_ptr[j], floor_ptr[j], ch_res_ptr, blocksize / 2);
         mdct->imdct_half(mdct, ch_res_ptr, floor_ptr[j]);
     }
 
@@ -1705,13 +1712,13 @@ static int vorbis_parse_audio_packet(vorbis_context *vc, float **floor_ptr)
         const float *win  = vc->win[blockflag & previous_window];
 
         if (blockflag == previous_window) {
-            vc->fdsp.vector_fmul_window(ret, saved, buf, win, blocksize / 4);
+            vc->fdsp->vector_fmul_window(ret, saved, buf, win, blocksize / 4);
         } else if (blockflag > previous_window) {
-            vc->fdsp.vector_fmul_window(ret, saved, buf, win, bs0 / 4);
+            vc->fdsp->vector_fmul_window(ret, saved, buf, win, bs0 / 4);
             memcpy(ret+bs0/2, buf+bs0/4, ((bs1-bs0)/4) * sizeof(float));
         } else {
             memcpy(ret, saved, ((bs1 - bs0) / 4) * sizeof(float));
-            vc->fdsp.vector_fmul_window(ret + (bs1 - bs0) / 4, saved + (bs1 - bs0) / 4, buf, win, bs0 / 4);
+            vc->fdsp->vector_fmul_window(ret + (bs1 - bs0) / 4, saved + (bs1 - bs0) / 4, buf, win, bs0 / 4);
         }
         memcpy(saved, buf + blocksize / 4, blocksize / 4 * sizeof(float));
     }

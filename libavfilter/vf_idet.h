@@ -33,14 +33,28 @@ typedef enum {
     UNDETERMINED,
 } Type;
 
+typedef enum {
+    REPEAT_NONE,
+    REPEAT_TOP,
+    REPEAT_BOTTOM,
+} RepeatedField;
+
 typedef struct {
     const AVClass *class;
     float interlace_threshold;
     float progressive_threshold;
+    float repeat_threshold;
+    float half_life;
+    uint64_t decay_coefficient;
 
     Type last_type;
-    int prestat[4];
-    int poststat[4];
+
+    uint64_t repeats[3];
+    uint64_t prestat[4];
+    uint64_t poststat[4];
+    uint64_t total_repeats[3];
+    uint64_t total_prestat[4];
+    uint64_t total_poststat[4];
 
     uint8_t history[HIST_SIZE];
 
@@ -48,6 +62,10 @@ typedef struct {
     AVFrame *next;
     AVFrame *prev;
     ff_idet_filter_func filter_line;
+
+    int interlaced_flag_accuracy;
+    int analyze_interlaced_flag;
+    int analyze_interlaced_flag_done;
 
     const AVPixFmtDescriptor *csp;
     int eof;

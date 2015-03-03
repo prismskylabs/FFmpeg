@@ -87,7 +87,7 @@ int av_match_ext(const char *filename, const char *extensions)
 
     ext = strrchr(filename, '.');
     if (ext)
-        return av_match_list(ext + 1, extensions, ',');
+        return av_match_name(ext + 1, extensions);
     return 0;
 }
 
@@ -151,6 +151,8 @@ enum AVCodecID av_guess_codec(AVOutputFormat *fmt, const char *short_name,
         return fmt->audio_codec;
     else if (type == AVMEDIA_TYPE_SUBTITLE)
         return fmt->subtitle_codec;
+    else if (type == AVMEDIA_TYPE_DATA)
+        return fmt->data_codec;
     else
         return AV_CODEC_ID_NONE;
 }

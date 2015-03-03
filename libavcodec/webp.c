@@ -694,6 +694,11 @@ static int decode_entropy_coded_image(WebPContext *s, enum ImageRole role,
                 length = offset + get_bits(&s->gb, extra_bits) + 1;
             }
             prefix_code = huff_reader_get_symbol(&hg[HUFF_IDX_DIST], &s->gb);
+            if (prefix_code > 39) {
+                av_log(s->avctx, AV_LOG_ERROR,
+                       "distance prefix code too large: %d\n", prefix_code);
+                return AVERROR_INVALIDDATA;
+            }
             if (prefix_code < 4) {
                 distance = prefix_code + 1;
             } else {
@@ -1106,7 +1111,7 @@ static int vp8_lossless_decode_frame(AVCodecContext *avctx, AVFrame *p,
         avctx->pix_fmt = AV_PIX_FMT_ARGB;
     }
 
-    ret = init_get_bits(&s->gb, data_start, data_size * 8);
+    ret = init_get_bits8(&s->gb, data_start, data_size);
     if (ret < 0)
         return ret;
 

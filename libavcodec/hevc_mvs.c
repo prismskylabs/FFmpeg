@@ -118,7 +118,7 @@ static av_always_inline void mv_scale(Mv *dst, Mv *src, int td, int tb)
     td = av_clip_int8(td);
     tb = av_clip_int8(tb);
     tx = (0x4000 + abs(td / 2)) / td;
-    scale_factor = av_clip((tb * tx + 32) >> 6, -4096, 4095);
+    scale_factor = av_clip_intp2((tb * tx + 32) >> 6, 12);
     dst->x = av_clip_int16((scale_factor * src->x + 127 +
                            (scale_factor * src->x < 0)) >> 8);
     dst->y = av_clip_int16((scale_factor * src->y + 127 +
@@ -408,7 +408,7 @@ static void derive_spatial_merge_candidates(HEVCContext *s, int x0, int y0,
     // temporal motion vector candidate
     if (s->sh.slice_temporal_mvp_enabled_flag &&
         nb_merge_cand < s->sh.max_num_merge_cand) {
-        Mv mv_l0_col, mv_l1_col;
+        Mv mv_l0_col = { 0 }, mv_l1_col = { 0 };
         int available_l0 = temporal_luma_motion_vector(s, x0, y0, nPbW, nPbH,
                                                        0, &mv_l0_col, 0);
         int available_l1 = (s->sh.slice_type == B_SLICE) ?

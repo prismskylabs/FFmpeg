@@ -45,7 +45,7 @@
 #define BUFFER_SIZE   MAX_URL_SIZE
 #define MAX_REDIRECTS 8
 
-typedef struct {
+typedef struct HTTPContext {
     const AVClass *class;
     URLContext *hd;
     unsigned char buffer[BUFFER_SIZE], *buf_ptr, *buf_end;
@@ -207,6 +207,8 @@ static int http_open_cnx(URLContext *h, AVDictionary **options)
     HTTPContext *s = h->priv_data;
     int location_changed, attempts = 0, redirects = 0;
 redo:
+    av_dict_copy(options, s->chained_options, 0);
+
     cur_auth_type       = s->auth_state.auth_type;
     cur_proxy_auth_type = s->auth_state.auth_type;
 
@@ -250,6 +252,8 @@ redo:
 fail:
     if (s->hd)
         ffurl_closep(&s->hd);
+    if (location_changed < 0)
+        return location_changed;
     return ff_http_averror(s->http_code, AVERROR(EIO));
 }
 
@@ -266,7 +270,6 @@ int ff_http_do_new_request(URLContext *h, const char *uri)
     if (!s->location)
         return AVERROR(ENOMEM);
 
-    av_dict_copy(&options, s->chained_options, 0);
     ret = http_open_cnx(h, &options);
     av_dict_free(&options);
     return ret;
@@ -640,9 +643,9 @@ static int get_cookies(HTTPContext *s, char **cookies, const char *path,
         }
 
         done_cookie:
-        av_free(cdomain);
-        av_free(cpath);
-        av_free(cvalue);
+        av_freep(&cdomain);
+        av_freep(&cpath);
+        av_freep(&cvalue);
         if (ret < 0) {
             if (*cookies) av_freep(cookies);
             av_free(cset_cookies);
@@ -1134,7 +1137,6 @@ static int64_t http_seek(URLContext *h, int64_t off, int whence)
     s->hd = NULL;
 
     /* if it fails, continue on old connection */
-    av_dict_copy(&options, s->chained_options, 0);
     if ((ret = http_open_cnx(h, &options)) < 0) {
         av_dict_free(&options);
         memcpy(s->buffer, old_buf, old_buf_size);

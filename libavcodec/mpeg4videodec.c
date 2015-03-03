@@ -1763,7 +1763,7 @@ static int decode_vol_header(Mpeg4DecContext *ctx, GetBitContext *gb)
     s->avctx->framerate.num = get_bits(gb, 16);
     if (!s->avctx->framerate.num) {
         av_log(s->avctx, AV_LOG_ERROR, "framerate==0\n");
-        return -1;
+        return AVERROR_INVALIDDATA;
     }
 
     ctx->time_increment_bits = av_log2(s->avctx->framerate.num - 1) + 1;
@@ -1829,7 +1829,7 @@ static int decode_vol_header(Mpeg4DecContext *ctx, GetBitContext *gb)
                        "%d sprite_warping_points\n",
                        ctx->num_sprite_warping_points);
                 ctx->num_sprite_warping_points = 0;
-                return -1;
+                return AVERROR_INVALIDDATA;
             }
             s->sprite_warping_accuracy  = get_bits(gb, 2);
             ctx->sprite_brightness_change = get_bits1(gb);
@@ -2115,8 +2115,7 @@ int ff_mpeg4_workaround_bugs(AVCodecContext *avctx)
     MpegEncContext *s = &ctx->m;
 
     if (ctx->xvid_build == -1 && ctx->divx_version == -1 && ctx->lavc_build == -1) {
-        if (s->stream_codec_tag == AV_RL32("XVID") ||
-            s->codec_tag        == AV_RL32("XVID") ||
+        if (s->codec_tag        == AV_RL32("XVID") ||
             s->codec_tag        == AV_RL32("XVIX") ||
             s->codec_tag        == AV_RL32("RMP4") ||
             s->codec_tag        == AV_RL32("ZMP4") ||
@@ -2374,7 +2373,7 @@ static int decode_vop_header(Mpeg4DecContext *ctx, GetBitContext *gb)
 
         if (get_bits_left(gb) < 3) {
             av_log(s->avctx, AV_LOG_ERROR, "Header truncated\n");
-            return -1;
+            return AVERROR_INVALIDDATA;
         }
         ctx->intra_dc_threshold = ff_mpeg4_dc_threshold[get_bits(gb, 3)];
         if (!s->progressive_sequence) {
@@ -2413,7 +2412,7 @@ static int decode_vop_header(Mpeg4DecContext *ctx, GetBitContext *gb)
         if (s->qscale == 0) {
             av_log(s->avctx, AV_LOG_ERROR,
                    "Error, header damaged or not MPEG4 header (qscale=0)\n");
-            return -1;  // makes no sense to continue, as there is nothing left from the image then
+            return AVERROR_INVALIDDATA;  // makes no sense to continue, as there is nothing left from the image then
         }
 
         if (s->pict_type != AV_PICTURE_TYPE_I) {
@@ -2422,7 +2421,7 @@ static int decode_vop_header(Mpeg4DecContext *ctx, GetBitContext *gb)
                 av_log(s->avctx, AV_LOG_ERROR,
                        "Error, header damaged or not MPEG4 header (f_code=0)\n");
                 s->f_code = 1;
-                return -1;  // makes no sense to continue, as there is nothing left from the image then
+                return AVERROR_INVALIDDATA;  // makes no sense to continue, as there is nothing left from the image then
             }
         } else
             s->f_code = 1;
@@ -2433,7 +2432,7 @@ static int decode_vop_header(Mpeg4DecContext *ctx, GetBitContext *gb)
                 av_log(s->avctx, AV_LOG_ERROR,
                        "Error, header damaged or not MPEG4 header (b_code=0)\n");
                 s->b_code=1;
-                return -1; // makes no sense to continue, as the MV decoding will break very quickly
+                return AVERROR_INVALIDDATA; // makes no sense to continue, as the MV decoding will break very quickly
             }
         } else
             s->b_code = 1;
@@ -2502,6 +2501,7 @@ int ff_mpeg4_decode_picture_header(Mpeg4DecContext *ctx, GetBitContext *gb)
 {
     MpegEncContext *s = &ctx->m;
     unsigned startcode, v;
+    int ret;
 
     /* search next start code */
     align_get_bits(gb);
@@ -2590,8 +2590,8 @@ int ff_mpeg4_decode_picture_header(Mpeg4DecContext *ctx, GetBitContext *gb)
         }
 
         if (startcode >= 0x120 && startcode <= 0x12F) {
-            if (decode_vol_header(ctx, gb) < 0)
-                return -1;
+            if ((ret = decode_vol_header(ctx, gb)) < 0)
+                return ret;
         } else if (startcode == USER_DATA_STARTCODE) {
             decode_user_data(ctx, gb);
         } else if (startcode == GOP_STARTCODE) {
@@ -2795,7 +2795,7 @@ AVCodec ff_mpeg4_vdpau_decoder = {
     .long_name      = NULL_IF_CONFIG_SMALL("MPEG-4 part 2 (VDPAU)"),
     .type           = AVMEDIA_TYPE_VIDEO,
     .id             = AV_CODEC_ID_MPEG4,
-    .priv_data_size = sizeof(MpegEncContext),
+    .priv_data_size = sizeof(Mpeg4DecContext),
     .init           = decode_init,
     .close          = ff_h263_decode_end,
     .decode         = ff_h263_decode_frame,

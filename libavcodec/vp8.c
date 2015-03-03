@@ -176,18 +176,24 @@ int update_dimensions(VP8Context *s, int width, int height, int is_vp7)
     s->top_border  = av_mallocz((s->mb_width + 1) * sizeof(*s->top_border));
     s->thread_data = av_mallocz(MAX_THREADS * sizeof(VP8ThreadData));
 
+    if (!s->macroblocks_base || !s->top_nnz || !s->top_border ||
+        !s->thread_data || (!s->intra4x4_pred_mode_top && !s->mb_layout)) {
+        free_buffers(s);
+        return AVERROR(ENOMEM);
+    }
+
     for (i = 0; i < MAX_THREADS; i++) {
         s->thread_data[i].filter_strength =
             av_mallocz(s->mb_width * sizeof(*s->thread_data[0].filter_strength));
+        if (!s->thread_data[i].filter_strength) {
+            free_buffers(s);
+            return AVERROR(ENOMEM);
+        }
 #if HAVE_THREADS
         pthread_mutex_init(&s->thread_data[i].lock, NULL);
         pthread_cond_init(&s->thread_data[i].cond, NULL);
 #endif
     }
-
-    if (!s->macroblocks_base || !s->top_nnz || !s->top_border ||
-        (!s->intra4x4_pred_mode_top && !s->mb_layout))
-        return AVERROR(ENOMEM);
 
     s->macroblocks = s->macroblocks_base + 1;
 
@@ -1916,8 +1922,8 @@ void inter_predict(VP8Context *s, VP8ThreadData *td, uint8_t *dst[3],
                          mb->bmv[2 * y       * 4 + 2 * x + 1].y +
                          mb->bmv[(2 * y + 1) * 4 + 2 * x    ].y +
                          mb->bmv[(2 * y + 1) * 4 + 2 * x + 1].y;
-                uvmv.x = (uvmv.x + 2 + (uvmv.x >> (INT_BIT - 1))) >> 2;
-                uvmv.y = (uvmv.y + 2 + (uvmv.y >> (INT_BIT - 1))) >> 2;
+                uvmv.x = (uvmv.x + 2 + FF_SIGNBIT(uvmv.x)) >> 2;
+                uvmv.y = (uvmv.y + 2 + FF_SIGNBIT(uvmv.y)) >> 2;
                 if (s->profile == 3) {
                     uvmv.x &= ~7;
                     uvmv.y &= ~7;
@@ -2232,7 +2238,7 @@ static void vp8_decode_mv_mb_modes(AVCodecContext *avctx, VP8Frame *cur_frame,
             td->wait_mb_pos = INT_MAX;                                        \
             pthread_mutex_unlock(&otd->lock);                                 \
         }                                                                     \
-    } while (0);
+    } while (0)
 
 #define update_pos(td, mb_y, mb_x)                                            \
     do {                                                                      \
@@ -2251,7 +2257,7 @@ static void vp8_decode_mv_mb_modes(AVCodecContext *avctx, VP8Frame *cur_frame,
             pthread_cond_broadcast(&td->cond);                                \
             pthread_mutex_unlock(&td->lock);                                  \
         }                                                                     \
-    } while (0);
+    } while (0)
 #else
 #define check_thread_pos(td, otd, mb_x_check, mb_y_check)
 #define update_pos(td, mb_y, mb_x)
